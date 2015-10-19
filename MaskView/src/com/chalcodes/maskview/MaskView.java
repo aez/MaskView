@@ -44,6 +44,9 @@ public class MaskView extends View {
 	 * @param context 
 	 * @param attrs declared attributes
 	 */
+	@TargetApi(Build.VERSION_CODES.LOLLIPOP)
+	@SuppressWarnings("deprecation")
+	/* new Resources#getDrawable(...) was added in API 21; old version was deprecated in API 23 */
 	public MaskView(Context context, AttributeSet attrs) {
 		super(context, attrs);		
 		TypedArray a = context.getTheme().obtainStyledAttributes(
@@ -56,14 +59,12 @@ public class MaskView extends View {
 				mDynamicBackground = a.getBoolean(R.styleable.MaskView_dynamicBackground, false);
 				final int maskId = a.getResourceId(R.styleable.MaskView_alphaMask, 0);
 				if(maskId != 0) {
-					mAlphaMaskDrawable = getResources().getDrawable(maskId);
-					// based on http://stackoverflow.com/a/5121922/1953590
-					// this does not work in the wysiwyg editor
-//					mAlphaMaskDrawable.setColorFilter(new ColorMatrixColorFilter(new ColorMatrix(new float[] {
-//							0, 0, 0, 0, 0,
-//							0, 0, 0, 0, 0,
-//							0, 0, 0, 0, 0,
-//							1, 0, 0, 0, 0})));
+					if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+						mAlphaMaskDrawable = getResources().getDrawable(maskId, null);
+					}
+					else {
+						mAlphaMaskDrawable = getResources().getDrawable(maskId);
+					}
 				}
 				else {
 					mAlphaMaskDrawable = null;
@@ -74,7 +75,18 @@ public class MaskView extends View {
 				mAlphaMaskDrawable = null;
 			}
 			final int fgId = a.getResourceId(R.styleable.MaskView_foreground, 0);
-			mForegroundDrawable = fgId != 0 ? getResources().getDrawable(fgId) : null;
+			if(fgId != 0) {
+				if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+					mForegroundDrawable = getResources().getDrawable(fgId, null);
+				}
+				else {
+					mForegroundDrawable = getResources().getDrawable(fgId);
+				}
+			}
+			else {
+				mForegroundDrawable = null;
+			}
+			
 		}
 		finally {
 			a.recycle();
@@ -115,6 +127,10 @@ public class MaskView extends View {
 	protected void onDraw(Canvas canvas) {
 		final int w = getWidth();
 		final int h = getHeight();
+		
+		if(w <= 0 || h <= 0) {
+			return;
+		}
 		
 		boolean combine = false;
 		
