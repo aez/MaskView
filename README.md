@@ -3,4 +3,4 @@ Android View that creates the appearance of holes or partial transparency in Vie
 
 ![MaskView demo screenshot](http://chalcodes.com/wiki/images/7/73/MaskViewDemo.png)
 
-Builds against APIs 1 through 21.  Tested on APIs 9 through 21.
+Builds against APIs 4-23.  Tested on APIs 9-22.
