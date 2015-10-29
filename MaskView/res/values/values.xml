@@ -1,16 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <declare-styleable name="MaskView">
-        <!-- id of the view that will draw the MaskView's background -->
+        <!-- Layout ID of the view that will show through the "holes" in the
+        MaskView. -->
         <attr name="backgroundView" format="reference"/>
-        <!-- if true, the background view will be called upon to redraw the background
-        on every frame instead of only when the the MaskView's size or position changes -->
-        <attr name="dynamicBackground" format="boolean"/>
-        <!-- id of an image resource to be applied as an alpha mask to the MaskView's
-        background.  this can be a 9-patch. -->
+        <!-- Resource ID of the alpha mask that defines the "holes" in the
+        MaskView.  This can be a 9-patch. -->
         <attr name="alphaMask" format="reference"/>
-        <!-- id of an image resource to be drawn in the foreground.  this can be a
-        9-patch.  the alpha mask will not be applied to this image. -->
+        <!-- Resource ID of the foreground overlay.  This can be a 9-patch. -->
         <attr name="foreground" format="reference"/>
     </declare-styleable>
 </resources>

@@ -1,5 +1,6 @@
 package com.chalcodes.maskview;
 
+import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.content.Context;
 import android.content.res.TypedArray;
@@ -9,32 +10,28 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.graphics.PorterDuff;
 import android.graphics.PorterDuffXfermode;
+import android.graphics.Rect;
 import android.graphics.drawable.Drawable;
 import android.os.Build;
 import android.util.AttributeSet;
 import android.view.View;
 
 public class MaskView extends View {	
-	// primary fields	
 	/**
-	 * Resource ID of the view that draws the background image.  Store the ID
-	 * because the actual background view may not have been created at the
-	 * time the mask view is constructed.
+	 * Resource ID of the view whose background will show through the "holes"
+	 * in the MaskView.
 	 */
 	private final int mBackgroundViewId;
 	/**
-	 * True if {@link #mBackgroundView} should be called upon to redraw the
-	 * background every frame.  If false, it will only be redrawn when this
-	 * view's size or position changes relative to the background view.
+	 * The background view.  May be null.
 	 */
-	private final boolean mDynamicBackground;
+	private View mBackgroundView;
 	/**
-	 * Alpha mask that will be applied to the background.  This needs to be
-	 * drawn at the correct size, then converted from grayscale to alpha.
+	 * Alpha mask that defines the "holes" in the MaskView.
 	 */
 	private final Drawable mAlphaMaskDrawable;
 	/**
-	 * Image that will be drawn in the foreground.
+	 * Foreground overlay.
 	 */
 	private final Drawable mForegroundDrawable;
 	
@@ -46,17 +43,16 @@ public class MaskView extends View {
 	 */
 	@TargetApi(Build.VERSION_CODES.LOLLIPOP)
 	@SuppressWarnings("deprecation")
-	/* new Resources#getDrawable(...) was added in API 21; old version was deprecated in API 23 */
+	/* new getDrawable(...) was added in API 21; old version was deprecated in API 23 */
 	public MaskView(Context context, AttributeSet attrs) {
 		super(context, attrs);		
-		TypedArray a = context.getTheme().obtainStyledAttributes(
+		final TypedArray a = context.getTheme().obtainStyledAttributes(
                 attrs,
                 R.styleable.MaskView,
                 0, 0);
 		try {
 			mBackgroundViewId = a.getResourceId(R.styleable.MaskView_backgroundView, 0);
 			if(mBackgroundViewId != 0) {
-				mDynamicBackground = a.getBoolean(R.styleable.MaskView_dynamicBackground, false);
 				final int maskId = a.getResourceId(R.styleable.MaskView_alphaMask, 0);
 				if(maskId != 0) {
 					if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
@@ -71,7 +67,6 @@ public class MaskView extends View {
 				}				
 			}
 			else {
-				mDynamicBackground = false;
 				mAlphaMaskDrawable = null;
 			}
 			final int fgId = a.getResourceId(R.styleable.MaskView_foreground, 0);
@@ -93,38 +88,43 @@ public class MaskView extends View {
 		}
 	}
 	
-	// secondary fields - cached bitmaps and stuff
-	private final Canvas mBackgroundCanvas = new Canvas();
-	private final Canvas mAlphaMaskCanvas = new Canvas();
-	private final Canvas mForegroundCanvas = new Canvas();
-	private final Canvas mCombinedCanvas = new Canvas();
-	private final Paint mAlphaMaskPaint = new Paint();
+	/**
+	 * True if {@link #mCacheBitmap} needs to be redrawn.
+	 */
+	private boolean mRedraw = true;
 	
-	{
-		mAlphaMaskPaint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.DST_OUT));
+	@Override
+	protected void onSizeChanged(final int w, final int h, final int oldw, final int oldh) {
+		super.onSizeChanged(w, h, oldw, oldh);
+		mRedraw = true;
 	}
+
+	@Override
+	protected void onAttachedToWindow() {
+		super.onAttachedToWindow();
+		mBackgroundView = findPeerById(mBackgroundViewId);
+	}	
 	
-	/** Just the background. */
-	private Bitmap mBackgroundBitmap;
-	/** Just the alpha mask. */
-	private Bitmap mAlphaMaskBitmap;
-	/** Just the foreground. */
-	private Bitmap mForegroundBitmap;
-	/** Background with alpha applied and foreground overlaid. */
-	private Bitmap mCombinedBitmap;
+	/**
+	 * The composite bitmap.
+	 */
+	private Bitmap mCacheBitmap;
 	
 	private static final int X = 0;
 	private static final int Y = 1;
-	private final int[] mThisPosition = new int[2];
+	// retained to avoid frequent reallocations
+	private final int[] mViewPosition = new int[2];
 	private final int[] mBackgroundPosition = new int[2];
 	/**
-	 * This view's screen position relative to the background.  Determines
-	 * what part of the background bitmap to copy.
+	 * The position of the background view relative to this view.  If this
+	 * view is positioned below and to the right of the background view, the
+	 * element values will be negative.
 	 */
 	private final int[] mRelativePosition = new int[2];
-	
+
+	@SuppressLint("DrawAllocation") // allocations only occur when mRedraw == true
 	@Override
-	protected void onDraw(Canvas canvas) {
+	protected void onDraw(final Canvas outputCanvas) {
 		final int w = getWidth();
 		final int h = getHeight();
 		
@@ -132,80 +132,58 @@ public class MaskView extends View {
 			return;
 		}
 		
-		boolean combine = false;
+		final Drawable backgroundDrawable = mBackgroundView.getBackground();
 		
-		// background stuff
-		if(mBackgroundViewId != 0) {
-			final View backgroundView = findPeerById(mBackgroundViewId);
-			if(backgroundView != null) {
-				final Drawable backgroundDrawable = backgroundView.getBackground();
-				if(backgroundDrawable != null) {
-					// draw background if dynamic or background size changed
-					final int bw = backgroundView.getWidth();
-					final int bh = backgroundView.getHeight();
-					if(mDynamicBackground || mBackgroundBitmap == null ||
-							mBackgroundBitmap.getWidth() != bw || mBackgroundBitmap.getHeight() != bh) {
-						mBackgroundBitmap = prepareBitmap(bw, bh, mBackgroundBitmap);
-						mBackgroundCanvas.setBitmap(mBackgroundBitmap);
-						backgroundDrawable.setBounds(0, 0, bw, bh);
-						backgroundDrawable.draw(mBackgroundCanvas);
-						combine = true;
-					}					
-					// draw alpha mask if this view's size changed
-					// (only needed if background drawable exists)
-					if(mAlphaMaskDrawable != null) {
-						if(mAlphaMaskBitmap == null || mAlphaMaskBitmap.getWidth() != w || mAlphaMaskBitmap.getHeight() != h) {
-							mAlphaMaskBitmap = prepareBitmap(w, h, mAlphaMaskBitmap);
-							mAlphaMaskCanvas.setBitmap(mAlphaMaskBitmap);
-							mAlphaMaskDrawable.setBounds(0, 0, w, h);
-							mAlphaMaskDrawable.draw(mAlphaMaskCanvas);
-							combine = true;
-						}
-					}				
-					// set combine if relative position changed
-					getLocationOnScreen(mThisPosition);
-					backgroundView.getLocationOnScreen(mBackgroundPosition);
-					final int x = mBackgroundPosition[X] - mThisPosition[X];
-					final int y = mBackgroundPosition[Y] - mThisPosition[Y];
-					if(mRelativePosition[X] != x || mRelativePosition[Y] != y) {
-						mRelativePosition[X] = x;
-						mRelativePosition[Y] = y;
-						combine = true;
-					}
-				}
+		if(backgroundDrawable != null) {
+			getLocationOnScreen(mViewPosition);
+			mBackgroundView.getLocationOnScreen(mBackgroundPosition);
+			final int x = mBackgroundPosition[X] - mViewPosition[X];
+			final int y = mBackgroundPosition[Y] - mViewPosition[Y];
+			if(mRelativePosition[X] != x || mRelativePosition[Y] != y) {
+				mRelativePosition[X] = x;
+				mRelativePosition[Y] = y;
+				mRedraw = true;
 			}
-			// TODO what if background view or its background drawable existed but was removed?
 		}
 		
-		// draw foreground if this view's size changed
-		if(mForegroundDrawable != null) {
-			if(mForegroundBitmap == null || mForegroundBitmap.getWidth() != w || mForegroundBitmap.getHeight() != h) {
-				mForegroundBitmap = prepareBitmap(w, h, mForegroundBitmap);
-				mForegroundCanvas.setBitmap(mForegroundBitmap);
+		if(mRedraw) {
+			mCacheBitmap = prepareBitmap(w, h, mCacheBitmap);
+			final Canvas cacheCanvas = new Canvas(mCacheBitmap);
+			
+			if(backgroundDrawable != null) {
+				final int bw = mBackgroundView.getWidth();
+				final int bh = mBackgroundView.getHeight(); 
+				final Bitmap backgroundBitmap = prepareBitmap(bw, bh, null);
+				final Canvas backgroundCanvas = new Canvas(backgroundBitmap);
+				backgroundDrawable.setBounds(0, 0, bw, bh);
+				backgroundDrawable.draw(backgroundCanvas);
+				cacheCanvas.drawBitmap(backgroundBitmap, mRelativePosition[X], mRelativePosition[Y], null);
+				backgroundBitmap.recycle();
+
+				if(mAlphaMaskDrawable != null) {
+					final Bitmap maskBitmap = prepareBitmap(w, h, null);
+					final Canvas maskCanvas = new Canvas(maskBitmap);
+					mAlphaMaskDrawable.setBounds(0, 0, w, h);
+					mAlphaMaskDrawable.draw(maskCanvas);				
+					final Paint paint = new Paint();
+					paint.setXfermode(new PorterDuffXfermode(PorterDuff.Mode.DST_OUT));
+					cacheCanvas.drawBitmap(maskBitmap, 0, 0, paint);
+					maskBitmap.recycle();
+				}
+			}			
+
+			if(mForegroundDrawable != null) {
 				mForegroundDrawable.setBounds(0, 0, w, h);
-				mForegroundDrawable.draw(mForegroundCanvas);
-				combine = true;
+				mForegroundDrawable.draw(cacheCanvas);
 			}
+			
+			mRedraw = false;			
 		}
 		
-		if(combine) {
-			mCombinedBitmap = prepareBitmap(w, h, mCombinedBitmap);
-			mCombinedCanvas.setBitmap(mCombinedBitmap);
-			if(mBackgroundBitmap != null) {
-				mCombinedCanvas.drawBitmap(mBackgroundBitmap, mRelativePosition[X], mRelativePosition[Y], null);
-				if(mAlphaMaskBitmap != null) {
-					mCombinedCanvas.drawBitmap(mAlphaMaskBitmap, 0, 0, mAlphaMaskPaint);
-				}
-			}
-			if(mForegroundBitmap != null) {
-				mCombinedCanvas.drawBitmap(mForegroundBitmap, 0, 0, null);
-			}
-		}
-		
-		// finally!
-		canvas.drawBitmap(mCombinedBitmap, 0,  0, null);
+		final Rect clip = outputCanvas.getClipBounds();
+		outputCanvas.drawBitmap(mCacheBitmap, clip, clip, null);
 	}
-	
+
 	/**
 	 * Returns a transparent bitmap with the specified width and height.  If
 	 * the old bitmap is reusable, it will be cleared and returned.  If not,
@@ -215,46 +193,52 @@ public class MaskView extends View {
 	 * 
 	 * @param width the required width
 	 * @param height the required height
-	 * @param old a bitmap to be reused, or null
+	 * @param bitmap a bitmap to be reused, or null
 	 * @return a bitmap with the correct size, possibly but not necessarily
 	 * the old bitmap
 	 */
 	@TargetApi(Build.VERSION_CODES.KITKAT) // for Bitmap#reconfigure(...)
-	private static Bitmap prepareBitmap(int width, int height, Bitmap old) {
-		if(old != null) {
-			if(old.isRecycled()) {
-				old = null;
+	private static Bitmap prepareBitmap(final int width, final int height, Bitmap bitmap) {
+		if(bitmap != null) {
+			if(bitmap.isRecycled()) {
+				bitmap = null;
 			}
-			else if(old.getWidth() == width && old.getHeight() == height) {
-				old.eraseColor(Color.TRANSPARENT);
+			else if(bitmap.getWidth() == width && bitmap.getHeight() == height) {
+				bitmap.eraseColor(Color.TRANSPARENT);
 			}
 			else if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
 				try {
-					old.reconfigure(width, height, Bitmap.Config.ARGB_8888);
-					old.eraseColor(Color.TRANSPARENT);
+					bitmap.reconfigure(width, height, Bitmap.Config.ARGB_8888);
+					bitmap.eraseColor(Color.TRANSPARENT);
 				}
 				catch(IllegalArgumentException e) {
-					old.recycle(); // recommended on API 10 and lower
-					old = null;
+					bitmap.recycle(); // recommended on API 10 and lower
+					bitmap = null;
 				}
 			}
 			else {
-				old.recycle();
-				old = null;
+				bitmap.recycle();
+				bitmap = null;
 			}
 		}		
-		if(old == null) {
-			old = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+		if(bitmap == null) {
+			bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
 		}
-		return old;
+		return bitmap;
 	}
 	
-    private View findPeerById(int resId) {
+	/**
+	 * Finds a view within the hierarchy to which this view is attached. 
+	 * 
+	 * @param viewId the ID of the other view
+	 * @return the other view, or null
+	 */
+    private View findPeerById(int viewId) {
         View root = this;
         while(root.getParent() instanceof View) {
             root = (View) root.getParent();
         }
-        return root.findViewById(resId);
+        return root.findViewById(viewId);
     }
 
 }
